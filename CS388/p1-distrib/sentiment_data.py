@@ -79,7 +79,7 @@ def write_sentiment_examples(exs: List[SentimentExample], outfile: str):
     :param outfile: out path
     :return: None
     """
-    o = open(outfile, 'w')
+    o = open(outfile, 'w', encoding='utf-8')
     for ex in exs:
         o.write(repr(ex.label) + "\t" + " ".join([word for word in ex.words]) + "\n")
     o.close()

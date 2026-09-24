@@ -121,6 +121,6 @@ if __name__ == '__main__':
         test_exs_predicted = [SentimentExample(words, model.predict(words)) for words in test_exs]
         write_sentiment_examples(test_exs_predicted, args.test_output_path)
 
-    data = {'dev_acc': dev_acc, 'dev_f1': dev_f1, 'execution_time': train_eval_time, 'output': dev_out}
+    data = {'dev_acc': dev_acc, 'dev_f1': dev_f1, 'execution_time': train_eval_time, 'output': dev_out.splitlines()}
     print("=====Results=====")
     print(json.dumps(data, indent=2))
