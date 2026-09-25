@@ -1,8 +1,9 @@
 # models.py
-
+import re
 import torch
 import torch.nn as nn
 from torch import optim
+from torch.utils.data import DataLoader
 import numpy as np
 import random
 from typing import List
@@ -70,13 +71,14 @@ class UnigramFeatureExtractor(FeatureExtractor):
     Extracts unigram bag-of-words features from a sentence.
     The steps I'd like to take:
     1. lowercase all words
-    2. when turning into vectors: accumulate first, then softmax
-    3. throw out low count words by drop out least commont x percent
+    2. keep only letters
+    3. throw out low count words
+    4. throw out short words
     """
 
     def __init__(self, indexer: Indexer):
         # --- Config ---
-        self.DROP_OUT_PERC = 0.01
+        self.DROP_OUT_PERC = 0.05
         
         # --- Forward declearation ---
         self.indexer:Indexer = indexer
@@ -85,15 +87,24 @@ class UnigramFeatureExtractor(FeatureExtractor):
         return self.indexer
     
     def extract_features(self, sentence: List[str], add_to_indexer: bool = False) -> Counter:
-        count: Counter = []
+        count: Counter = Counter()
+        words = [
+            clean_word
+            for word in sentence
+            if len(clean_word := re.sub(r"[^a-z\d]", "", word)) > 3
+        ] # words after process
         if add_to_indexer:
-            for word in sentence:
-                count[self.indexer.add_and_get_index(word.lower())] += 1
+            for word in words:
+                count[word] += 1
+            print(f"[BOW] Count was: {len(count)}, now is {round(len(count)*(1-self.DROP_OUT_PERC))}")
+            count = count.most_common(round(len(count)*(1-self.DROP_OUT_PERC)))
+            self.indexer = Indexer(i[0] for i in count)
+            count = self.extract_features(sentence)
         else:
-            for word in sentence:
-                count[self.indexer.index_of(word.lower())] += 1
+            for word in words:
+                count[self.indexer.index_of(word)] += 1
             count[-1] = 0
-        return count.most_common(len(count)*(1-self.DROP_OUT_PERC))
+        return count
 
 
 class BigramFeatureExtractor(FeatureExtractor):
@@ -114,14 +125,49 @@ class BetterFeatureExtractor(FeatureExtractor):
         raise Exception("Must be implemented")
 
 
-class LogisticRegressionClassifier(SentimentClassifier):
+class LogisticRegressionClassifier(SentimentClassifier, nn.Module):
     """
     Implement this class -- you should at least have init() and implement the predict method from the SentimentClassifier
     superclass. Hint: you'll probably need this class to wrap both the weight vector and featurizer -- feel free to
     modify the constructor to pass these in.
     """
-    def __init__(self):
-        raise Exception("Must be implemented")
+    
+    # 2. when turning into vectors: accumulate first, then softmax
+    def __init__(self, feat_extractor: FeatureExtractor, vocab_size:int):
+        super(LogisticRegressionClassifier, self).__init__()
+        # External resource
+        self.extractor:FeatureExtractor = feat_extractor
+        self.vocab_size = vocab_size
+        # runtime
+        self.linear = nn.Linear(vocab_size, 2)
+    
+    def words_to_vec(self, words:List[str], vocab_size: int) -> torch.Tensor:
+        vec = torch.zeros(vocab_size, dtype=torch.float32)
+        
+        count = self.extractor.extract_features(words)
+        if not count: return vec
+        
+        indices = torch.tensor(list(count.keys()), dtype=torch.long)
+        values = torch.tensor(list(count.values()), dtype=torch.float32)
+        vec[indices] = values
+        
+        return vec.view(1, -1)
+    
+    def predict(self, ex_words: List[str]) -> int:
+        """
+        Makes a prediction on the given sentence
+        :param ex_words: words to predict on
+        :return: 0 or 1 with the label
+        """
+        self.eval()
+        with torch.no_grad():
+            x = self.words_to_vec(ex_words, self.vocab_size)
+            logits = self(x)
+
+        return torch.argmax(logits, dim=-1)
+        
+    def forward(self, bow_vec):
+        return self.linear(bow_vec)
 
 
 def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor: FeatureExtractor) -> LogisticRegressionClassifier:
@@ -131,8 +177,37 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     :param feat_extractor: feature extractor to use
     :return: trained LogisticRegressionClassifier model
     """
+    # Summon bag-of-word
+    bow: List[str] = []
+    for item in train_exs:
+        bow += item.words
+    _ = feat_extractor.extract_features(bow,True)
+    vocab_size = len(_) + 1
+    print(f"After training, we have kept {vocab_size} words!")
     
-    raise Exception("Must be implemented")
+    # Start training
+    model = LogisticRegressionClassifier(feat_extractor=feat_extractor, vocab_size=vocab_size)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    
+    for epoch in range(50):
+        for item in train_exs:
+            text = item.words
+            label = item.label
+            bow_vec = model.words_to_vec(text, vocab_size)
+            target = torch.tensor([label], dtype=torch.long)
+
+            optimizer.zero_grad()
+            output = model(bow_vec)
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
+    print("--- DONE TRAINING---")
+    print("Test output: ", model.predict(train_exs[0].words))
+    print("--- DONE TEST ---")
+    return model
 
 
 def train_linear_model(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample]) -> SentimentClassifier:

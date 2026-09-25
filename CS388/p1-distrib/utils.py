@@ -10,9 +10,12 @@ class Indexer(object):
         objs_to_ints
         ints_to_objs
     """
-    def __init__(self):
+
+    def __init__(self, obj_list: list = None):
         self.objs_to_ints = {}
         self.ints_to_objs = {}
+        if obj_list:
+            for i in obj_list: self.add_and_get_index(i)
 
     def __repr__(self):
         return str([str(self.get_object(i)) for i in range(0, len(self))])
