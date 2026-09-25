@@ -141,8 +141,8 @@ class LogisticRegressionClassifier(SentimentClassifier, nn.Module):
         # runtime
         self.linear = nn.Linear(vocab_size, 2)
     
-    def words_to_vec(self, words:List[str], vocab_size: int) -> torch.Tensor:
-        vec = torch.zeros(vocab_size, dtype=torch.float32)
+    def words_to_vec(self, words:List[str]) -> torch.Tensor:
+        vec = torch.zeros(self.vocab_size, dtype=torch.float32)
         
         count = self.extractor.extract_features(words)
         if not count: return vec
@@ -151,7 +151,7 @@ class LogisticRegressionClassifier(SentimentClassifier, nn.Module):
         values = torch.tensor(list(count.values()), dtype=torch.float32)
         vec[indices] = values
         
-        return vec.view(1, -1)
+        return vec
     
     def predict(self, ex_words: List[str]) -> int:
         """
@@ -161,7 +161,7 @@ class LogisticRegressionClassifier(SentimentClassifier, nn.Module):
         """
         self.eval()
         with torch.no_grad():
-            x = self.words_to_vec(ex_words, self.vocab_size)
+            x = self.words_to_vec(ex_words)
             logits = self(x)
 
         return torch.argmax(logits, dim=-1)
@@ -169,6 +169,22 @@ class LogisticRegressionClassifier(SentimentClassifier, nn.Module):
     def forward(self, bow_vec):
         return self.linear(bow_vec)
 
+def collate_batch(batch, model):
+    # batch is a list with batch_size count of item
+    bow_list = []
+    labels = []
+    for item in batch:
+        vec = model.words_to_vec(item.words)
+        bow_list.append(vec)
+        labels.append(item.label)
+
+    bow_tensor = torch.stack(bow_list)
+    label_tensor = torch.tensor(labels, dtype=torch.long)
+
+    return bow_tensor, label_tensor
+
+def create_collate_fn(model):
+    return lambda batch: collate_batch(batch=batch, model=model)
 
 def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor: FeatureExtractor) -> LogisticRegressionClassifier:
     """
@@ -182,31 +198,39 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     for item in train_exs:
         bow += item.words
     _ = feat_extractor.extract_features(bow,True)
-    vocab_size = len(_) + 1
+    vocab_size = len(_)-1
     print(f"After training, we have kept {vocab_size} words!")
     
     # Start training
     model = LogisticRegressionClassifier(feat_extractor=feat_extractor, vocab_size=vocab_size)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.1)
+    optimizer = optim.SGD(model.parameters(), lr=0.15)
     
-    for epoch in range(50):
-        for item in train_exs:
-            text = item.words
-            label = item.label
-            bow_vec = model.words_to_vec(text, vocab_size)
-            target = torch.tensor([label], dtype=torch.long)
-
+    train_loader = DataLoader(
+        train_exs,
+        batch_size=64,
+        shuffle=True,
+        collate_fn=create_collate_fn(model=model),
+    )
+    
+    for epoch in range(30):
+        model.train()
+        total_loss = 0.0
+        total_samples = 0
+        
+        for bow_vec, targets in train_loader:
             optimizer.zero_grad()
             output = model(bow_vec)
-            loss = criterion(output, target)
+            loss = criterion(output, targets)
             loss.backward()
             optimizer.step()
+            total_loss += loss.item() * targets.size(0)
+            total_samples += targets.size(0)
+            
+        avg_loss = total_loss / total_samples
         if (epoch + 1) % 10 == 0:
-            print(f"Epoch {epoch+1}, Loss: {loss.item():.4f}")
-    print("--- DONE TRAINING---")
-    print("Test output: ", model.predict(train_exs[0].words))
-    print("--- DONE TEST ---")
+            print(f"Epoch {epoch+1}, Loss: {avg_loss:.4f}")
+            
     return model
 
 
