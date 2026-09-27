@@ -11,6 +11,48 @@ from sentiment_data import *
 from utils import *
 from collections import Counter
 
+import spacy
+from spacy.tokens import Doc
+from nltk.stem.snowball import SnowballStemmer
+from nltk.corpus import stopwords
+
+word_map = {}
+
+def prep_map(full_vocab):
+    # 1. 准备停用词与黑名单
+    stop_words = set(stopwords.words('english')) - {'no', 'not', 'nor', 'never', "didn't", "wasn't"}
+    ptb_noise = {"''", "``", "'s", "n't", "-lrb-", "-rrb-", "'m", "'re", "'ve", "'ll", "'d"}
+    stop_words.update(ptb_noise)
+
+    # 2. 核心：只对【完整词库】做一次 spaCy 批处理，构建映射字典
+    nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
+
+    # 把词库去重、转小写后打包处理
+    vocab_list = list(set(w.lower() for w in full_vocab))
+    
+    # 用 pipe 一瞬间跑完几千个独立词汇（耗时不到 0.5 秒）
+    for doc in nlp.pipe(vocab_list, batch_size=2000):
+        token = doc[0] if len(doc) > 0 else None
+        if not token:
+            continue
+            
+        w = token.text
+        lemma = token.lemma_.lower()
+        
+        # 规则过滤：是噪音/停用词/标点，直接映射为 None（丢弃）
+        if (token.is_punct or 
+            len(w) <= 1 or 
+            w in stop_words or 
+            lemma in stop_words or 
+            (w.startswith('-') and w.endswith('-'))):
+            word_map[w] = None
+        else:
+            # 有效词，映射为它的词形还原（Lemma）
+            word_map[w] = lemma
+
+def prep_words(words:List[str]) -> List[str]:
+    return [word_map[w] for w in words if word_map.__contains__(w) and word_map[w]]
+    
 class SentimentClassifier(object):
     """
     Sentiment classifier base type
@@ -88,18 +130,24 @@ class UnigramFeatureExtractor(FeatureExtractor):
     
     def extract_features(self, sentence: List[str], add_to_indexer: bool = False) -> Counter:
         count: Counter = Counter()
-        words = [
-            clean_word
-            for word in sentence
-            if len(word)>=3 and len(clean_word := re.sub(r"[^a-z\d]", "", word))
-        ] # words after process
+        # words = [
+        #     clean_word
+        #     for word in sentence
+        #     if len(word)>=3 and len(clean_word := re.sub(r"[^a-z\d]", "", word))
+        # ]
+        words = prep_words(sentence)
+        
         if add_to_indexer:
             for word in words:
                 count[word] += 1
-            # print(f"[BOW] Count was: {len(count)}, now is {round(len(count)*(1-self.DROP_OUT_PERC))}")
-            # count = count.most_common(round(len(count)*(1-self.DROP_OUT_PERC)))
-            self.indexer = Indexer(k if count[k]>self.DROP_OUT_COUNT else None for k in count)
-            count = self.extract_features(sentence)
+            # print(f"[BOW] Count was: {len(words)} -> {len(count)}, for map as {len(word_map)}")
+            for k in count.keys():
+                if count[k]>self.DROP_OUT_COUNT:
+                    self.indexer.add_and_get_index(k)
+                # else:
+                #     print(k, count[k])
+            print(f"[BOW] Count is now: {len(self.indexer)}")
+            return self.extract_features(sentence)
         else:
             for word in words:
                 count[self.indexer.index_of(word)] += 1
@@ -194,13 +242,15 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     :return: trained LogisticRegressionClassifier model
     """
     # Summon bag-of-word
-    bow: List[str] = []
+    bow = []
     for item in train_exs:
         bow += item.words
-    _ = feat_extractor.extract_features(bow,True)
-    vocab_size = len(_)
+    prep_map(bow)
+    feat_extractor.extract_features(bow,True)
+    vocab_size = len(feat_extractor.get_indexer())
     print(f"After training, we have kept {vocab_size} words!")
-    
+    print(prep_words(train_exs[0].words))
+
     # Start training
     model = LogisticRegressionClassifier(feat_extractor=feat_extractor, vocab_size=vocab_size)
     criterion = nn.CrossEntropyLoss()
@@ -213,7 +263,7 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
         collate_fn=create_collate_fn(model=model),
     )
     
-    for epoch in range(15):
+    for epoch in range(30):
         model.train()
         total_loss = 0.0
         total_samples = 0
