@@ -11,7 +11,6 @@ from sentiment_data import *
 from utils import *
 from collections import Counter
 
-
 class SentimentClassifier(object):
     """
     Sentiment classifier base type
@@ -264,14 +263,64 @@ def train_linear_model(args, train_exs: List[SentimentExample], dev_exs: List[Se
     return model
 
 
-class NeuralSentimentClassifier(SentimentClassifier):
+class NeuralSentimentClassifier(SentimentClassifier, nn.Module):
     """
     Implement your NeuralSentimentClassifier here. This should wrap an instance of the network with learned weights
     along with everything needed to run it on new data (word embeddings, etc.)
     """
-    def __init__(self, network, word_embeddings):
-        raise NotImplementedError
-
+    
+    def __init__(self, word_embeddings: WordEmbeddings):
+        # --- Constants ---
+        self.HID_LAYER_SIZE = 300
+        self.HID_LAYER_COUNT= 2
+        self.DROP_OUT_PROB  = 0.3
+        
+        # --- Perminant save ---
+        self.word_embeddings = word_embeddings
+        self.embed_dim = word_embeddings.get_embedding_length()
+        
+        # --- init ---
+        super(NeuralSentimentClassifier, self).__init__()
+        
+        self.embed_layer = word_embeddings.get_initialized_embedding_layer()
+        
+        hid_layers = []
+        in_dim = self.embed_dim
+        for _ in range(self.HID_LAYER_COUNT):
+            hid_layers.append(nn.Linear(in_dim, self.HID_LAYER_SIZE))
+            hid_layers.append(nn.ReLU())
+            in_dim = self.HID_LAYER_SIZE
+            
+        self.classifier = nn.Sequential(
+                                        *hid_layers,
+                                        nn.Linear(self.HID_LAYER_SIZE, 2),
+                                        nn.LogSoftmax(dim=0)
+                                        )
+        
+        # Initialize weights according to a formula due to Xavier Glorot.
+        # nn.init.xavier_uniform_(self.W.weight)
+    
+    def words_to_vec(self, sentence):
+        vecs = []
+        for w in sentence: vecs.append(torch.tensor(self.word_embeddings.get_embedding(w), dtype=torch.float32))
+        if self.training:
+            new_vec = [v for v in vecs if torch.rand(1).item() > self.DROP_OUT_PROB]
+            if new_vec: vecs = new_vec
+        embeds = torch.stack(vecs)
+        avg_embed = embeds.mean(dim=0)
+        return avg_embed
+    
+    def forward(self, x):
+        return self.classifier(x)
+    
+    def predict(self, ex_words):
+        self.eval()
+        with torch.no_grad():
+            x = self.words_to_vec(ex_words)
+            logits = self(x)
+        
+        return torch.argmax(logits, dim=-1).item()
+    
 
 def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_exs: List[SentimentExample], word_embeddings: WordEmbeddings) -> NeuralSentimentClassifier:
     """
@@ -282,4 +331,37 @@ def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_ex
     :param word_embeddings: set of loaded word embeddings
     :return: A trained NeuralSentimentClassifier model
     """
-    raise NotImplementedError
+    
+    num_epochs = 30
+    model = NeuralSentimentClassifier(word_embeddings)
+    criterion = nn.CrossEntropyLoss()
+    initial_learning_rate = 0.001
+    optimizer = optim.Adam(model.parameters(), lr=initial_learning_rate)
+    
+    for epoch in range(0, num_epochs):
+        model.train()
+        train_loader = DataLoader(
+            train_exs,
+            batch_size=64,
+            shuffle=True,
+            collate_fn=create_collate_fn(model=model),
+        )
+        total_loss = 0.0
+        for x,y in train_loader:
+            # Zero out the gradients from the FFNN object. *THIS IS VERY IMPORTANT TO DO BEFORE CALLING BACKWARD()*
+            model.zero_grad()
+            logits = model.forward(x)
+            # Can also use built-in NLLLoss as a shortcut here but we're being explicit here
+            loss = criterion(logits,y)
+            total_loss += loss.item()
+            # Computes the gradient and takes the optimizer step
+            loss.backward()
+            optimizer.step()
+        
+        if epoch%5==0:
+            print("Total loss on epoch %i: %f" % (epoch, total_loss))
+    
+    # print("--- TEST INFERENCE ---")
+    # print(f"Input: {train_exs[0].words}; LOGITS: {model.forward(model.words_to_vec(train_exs[0].words))} ; OUTPUT: {model.predict(train_exs[0].words)}; DESIRED: {train_exs[0].label}")
+    # print("--- TEST INFERENCE ---")
+    return model
