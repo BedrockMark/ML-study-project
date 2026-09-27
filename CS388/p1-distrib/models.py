@@ -78,7 +78,8 @@ class UnigramFeatureExtractor(FeatureExtractor):
 
     def __init__(self, indexer: Indexer):
         # --- Config ---
-        self.DROP_OUT_PERC = 0.05
+        # self.DROP_OUT_PERC = 0.1
+        self.DROP_OUT_COUNT = 3
         
         # --- Forward declearation ---
         self.indexer:Indexer = indexer
@@ -91,14 +92,14 @@ class UnigramFeatureExtractor(FeatureExtractor):
         words = [
             clean_word
             for word in sentence
-            if len(clean_word := re.sub(r"[^a-z\d]", "", word)) > 3
+            if len(word)>=3 and len(clean_word := re.sub(r"[^a-z\d]", "", word))
         ] # words after process
         if add_to_indexer:
             for word in words:
                 count[word] += 1
-            print(f"[BOW] Count was: {len(count)}, now is {round(len(count)*(1-self.DROP_OUT_PERC))}")
-            count = count.most_common(round(len(count)*(1-self.DROP_OUT_PERC)))
-            self.indexer = Indexer(i[0] for i in count)
+            # print(f"[BOW] Count was: {len(count)}, now is {round(len(count)*(1-self.DROP_OUT_PERC))}")
+            # count = count.most_common(round(len(count)*(1-self.DROP_OUT_PERC)))
+            self.indexer = Indexer(k if count[k]>self.DROP_OUT_COUNT else None for k in count)
             count = self.extract_features(sentence)
         else:
             for word in words:
@@ -198,7 +199,7 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     for item in train_exs:
         bow += item.words
     _ = feat_extractor.extract_features(bow,True)
-    vocab_size = len(_)-1
+    vocab_size = len(_)
     print(f"After training, we have kept {vocab_size} words!")
     
     # Start training
@@ -208,7 +209,7 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     
     train_loader = DataLoader(
         train_exs,
-        batch_size=64,
+        batch_size=32,
         shuffle=True,
         collate_fn=create_collate_fn(model=model),
     )
