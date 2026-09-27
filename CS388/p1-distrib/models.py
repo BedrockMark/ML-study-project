@@ -205,7 +205,7 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     # Start training
     model = LogisticRegressionClassifier(feat_extractor=feat_extractor, vocab_size=vocab_size)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.15)
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
     
     train_loader = DataLoader(
         train_exs,
@@ -214,7 +214,7 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
         collate_fn=create_collate_fn(model=model),
     )
     
-    for epoch in range(30):
+    for epoch in range(15):
         model.train()
         total_loss = 0.0
         total_samples = 0
@@ -229,7 +229,7 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
             total_samples += targets.size(0)
             
         avg_loss = total_loss / total_samples
-        if (epoch + 1) % 10 == 0:
+        if (epoch + 1) % 5 == 0:
             print(f"Epoch {epoch+1}, Loss: {avg_loss:.4f}")
             
     return model
