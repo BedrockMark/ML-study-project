@@ -11,47 +11,46 @@ from sentiment_data import *
 from utils import *
 from collections import Counter
 
-import spacy
-from spacy.tokens import Doc
-from nltk.stem.snowball import SnowballStemmer
 from nltk.corpus import stopwords
+SENTIMENT_RESERVED = {
+    # 否定词
+    "no", "not", "nor", "never", "hardly", "scarcely", "barely", "without",
+    # 程度副词
+    "too", "very", "so", "more", "most", "less", "least", "really", "quite",
+    # 转折/对比
+    "but", "however", "although", "against"
+}
 
 word_map = {}
 
 def prep_map(full_vocab):
-    # 1. 准备停用词与黑名单
-    stop_words = set(stopwords.words('english')) - {'no', 'not', 'nor', 'never', "didn't", "wasn't"}
-    ptb_noise = {"''", "``", "'s", "n't", "-lrb-", "-rrb-", "'m", "'re", "'ve", "'ll", "'d"}
-    stop_words.update(ptb_noise)
-
-    # 2. 核心：只对【完整词库】做一次 spaCy 批处理，构建映射字典
-    nlp = spacy.load("en_core_web_sm", disable=["parser", "ner"])
-
-    # 把词库去重、转小写后打包处理
-    vocab_list = list(set(w.lower() for w in full_vocab))
+    raw_stopwords = set(stopwords.words('english'))
+    stop_words = raw_stopwords - SENTIMENT_RESERVED
     
-    # 用 pipe 一瞬间跑完几千个独立词汇（耗时不到 0.5 秒）
-    for doc in nlp.pipe(vocab_list, batch_size=2000):
-        token = doc[0] if len(doc) > 0 else None
-        if not token:
-            continue
-            
-        w = token.text
-        lemma = token.lemma_.lower()
-        
-        # 规则过滤：是噪音/停用词/标点，直接映射为 None（丢弃）
-        if (token.is_punct or 
-            len(w) <= 1 or 
-            w in stop_words or 
-            lemma in stop_words or 
-            (w.startswith('-') and w.endswith('-'))):
+    # PTB 特有标记噪音（SST-2 来源是 Penn Treebank）
+    ptb_noise = {"''", "``", "-lrb-", "-rrb-"}
+    
+    vocab_list = set(w.lower() for w in full_vocab)
+    
+    for w in vocab_list:
+        # 1. 过滤纯数字或 PTB 噪音标记
+        if w in ptb_noise:
+            word_map[w] = None
+        # 2. 停用词丢弃（但保留了核心情感词）
+        elif w in stop_words:
+            word_map[w] = None
+        # 3. 过滤纯下划线等无关符号
+        elif re.match(r"^[-_]+$", w):
             word_map[w] = None
         else:
-            # 有效词，映射为它的词形还原（Lemma）
-            word_map[w] = lemma
+            # 保持原样，不使用无上下文的 lemma
+            word_map[w] = w
+            
+    return word_map
 
-def prep_words(words:List[str]) -> List[str]:
-    return [word_map[w] for w in words if word_map.__contains__(w) and word_map[w]]
+def prep_words(words: List[str]) -> List[str]:
+    # 安全映射，转为小写并在映射表中查表
+    return [word_map[w.lower()] for w in words if w.lower() in word_map and word_map[w.lower()] is not None]
     
 class SentimentClassifier(object):
     """
@@ -120,7 +119,7 @@ class UnigramFeatureExtractor(FeatureExtractor):
     def __init__(self, indexer: Indexer):
         # --- Config ---
         # self.DROP_OUT_PERC = 0.1
-        self.DROP_OUT_COUNT = 3
+        self.DROP_OUT_COUNT = 5
         
         # --- Forward declearation ---
         self.indexer:Indexer = indexer
@@ -258,12 +257,12 @@ def train_logistic_regression(train_exs: List[SentimentExample], feat_extractor:
     
     train_loader = DataLoader(
         train_exs,
-        batch_size=32,
+        batch_size=64,
         shuffle=True,
         collate_fn=create_collate_fn(model=model),
     )
     
-    for epoch in range(30):
+    for epoch in range(26):
         model.train()
         total_loss = 0.0
         total_samples = 0
@@ -381,6 +380,13 @@ def train_deep_averaging_network(args, train_exs: List[SentimentExample], dev_ex
     :param word_embeddings: set of loaded word embeddings
     :return: A trained NeuralSentimentClassifier model
     """
+    # It turned out that the training data was super clean and not really need any further cleaning X(
+    # bow = []
+    # for item in train_exs:
+    #     bow += item.words
+    # prep_map(bow)
+    # for i in train_exs:
+    #     i.words = prep_words(i.words)
     
     num_epochs = 30
     model = NeuralSentimentClassifier(word_embeddings)
