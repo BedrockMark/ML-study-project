@@ -39,17 +39,32 @@ class Transformer(nn.Module):
         :param num_layers: number of TransformerLayers to use; can be whatever you want
         """
         super().__init__()
-        raise Exception("Implement me")
+        self.char_embed = nn.Embedding(vocab_size, d_model)
+        self.pos_embed = PositionalEncoding(d_model, num_positions)
+        
+        tf_layers = []
+        for i in range(num_layers):
+            tf_layers.append(TransformerLayer(d_model, d_internal))
+        self.tf = nn.Sequential(*tf_layers)
+        
+        self.decision = nn.Sequential(
+            nn.Linear(d_model,num_classes),
+            nn.LogSoftmax(-1)
+        )
 
     def forward(self, indices):
         """
-
         :param indices: list of input indices
         :return: A tuple of the softmax log probabilities (should be a 20x3 matrix) and a list of the attention
         maps you use in your layers (can be variable length, but each should be a 20x20 matrix)
         """
-        raise Exception("Implement me")
-
+        print(f"Shape of indices: {indices.shape}")
+        x = self.pos_embed(self.char_embed(indices))
+        logits = self.tf(x)
+        attention_maps = []
+        for l in self.tf:
+            attention_maps.extend(l.attention_map)
+        return self.decision(logits), attention_maps
 
 # Your implementation of the Transformer layer goes here. It should take vectors and return the same number of vectors
 # of the same length, applying self-attention, the feedforward layer, etc.
@@ -62,10 +77,37 @@ class TransformerLayer(nn.Module):
         should both be of this length.
         """
         super().__init__()
-        raise Exception("Implement me")
-
+        self.io_size = d_model
+        self.intern_size = d_internal
+        self.attention_map = None
+        
+        # --- P1: self-attention
+        self.q=nn.Linear(d_model, d_internal)
+        self.k=nn.Linear(d_model, d_internal)
+        self.v=nn.Linear(d_model, d_internal)
+        
+        # --- p2: FFN
+        self.ffn=nn.Sequential(
+            nn.Linear(d_internal, d_internal),
+            nn.ReLU(),
+            nn.Linear(d_internal, d_model)
+        )
+        
+        # --- extra: map from d_model to d_internal for residual calculation
+        self.map=nn.Linear(d_model, d_internal)
+    
     def forward(self, input_vecs):
-        raise Exception("Implement me")
+        # input_vecs -> [seq len, model]
+        self.attention_map = []
+    
+        scores = self.q(input_vecs) @ self.k(input_vecs).transpose(-2,-1) / np.sqrt(self.intern_size) # -> [seq len, internal] * [internal, seq len] = [seq len,seq len]
+        attn = nn.Softmax(scores, dim=-1)
+        self.attention_map.append(attn)
+        
+        residual=attn @ self.v(input_vecs) # -> [seq len,moseq lendel] * [seq len, internal] = [seq len, internal]
+        residual+=self.out(input_vecs) # mapped so we can do [seq len, internal] + [seq len, internal]
+        
+        return residual
 
 
 # Implementation of positional encoding that you can use in your network
@@ -103,29 +145,40 @@ class PositionalEncoding(nn.Module):
 
 # This is a skeleton for train_classifier: you can implement this however you want
 def train_classifier(args, train, dev):
-    raise Exception("Not fully implemented yet")
-
-    # The following code DOES NOT WORK but can be a starting point for your implementation
-    # Some suggested snippets to use:
-    model = Transformer(...)
-    model.zero_grad()
-    model.train()
+    
+    vocab_size = max(
+        max(i.input_indexed.max() for i in train)+1,
+        1
+    )
+    
+    model = Transformer(vocab_size,20,128,64,3,2)
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
+    loss_fcn = nn.NLLLoss()
+    
+    model.train()
 
     num_epochs = 10
     for t in range(0, num_epochs):
         loss_this_epoch = 0.0
+        
         random.seed(t)
         # You can use batching if you'd like
         ex_idxs = [i for i in range(0, len(train))]
         random.shuffle(ex_idxs)
-        loss_fcn = nn.NLLLoss()
+        
         for ex_idx in ex_idxs:
-            loss = loss_fcn(...) # TODO: Run forward and compute loss
-            # model.zero_grad()
-            # loss.backward()
-            # optimizer.step()
+            cur = train[ex_idx]
+            
+            model.zero_grad()
+            prob, _ = model(cur.input_tensor)
+            loss = loss_fcn(prob, cur.output_tensor)
+            loss.backward()
+            optimizer.step()
+            
             loss_this_epoch += loss.item()
+        
+        print(f"Loss in Epoch #{t} = {loss_this_epoch}")
+        
     model.eval()
     return model
 
