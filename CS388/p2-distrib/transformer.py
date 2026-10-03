@@ -58,7 +58,7 @@ class Transformer(nn.Module):
         :return: A tuple of the softmax log probabilities (should be a 20x3 matrix) and a list of the attention
         maps you use in your layers (can be variable length, but each should be a 20x20 matrix)
         """
-        print(f"Shape of indices: {indices.shape}")
+        # print(f"Shape of indices: {indices.shape}")
         x = self.pos_embed(self.char_embed(indices))
         logits = self.tf(x)
         attention_maps = []
@@ -88,26 +88,30 @@ class TransformerLayer(nn.Module):
         
         # --- p2: FFN
         self.ffn=nn.Sequential(
-            nn.Linear(d_internal, d_internal),
+            nn.Linear(d_model, d_internal),
             nn.ReLU(),
             nn.Linear(d_internal, d_model)
         )
         
-        # --- extra: map from d_model to d_internal for residual calculation
-        self.map=nn.Linear(d_model, d_internal)
+        # --- extra: help attention do residual addition from origional data
+        self.attn_out=nn.Linear(d_internal, d_model)
     
     def forward(self, input_vecs):
-        # input_vecs -> [seq len, model]
+        # input_vecs is [seq len, model]
         self.attention_map = []
     
-        scores = self.q(input_vecs) @ self.k(input_vecs).transpose(-2,-1) / np.sqrt(self.intern_size) # -> [seq len, internal] * [internal, seq len] = [seq len,seq len]
-        attn = nn.Softmax(scores, dim=-1)
+        scores = self.q(input_vecs) @ self.k(input_vecs).transpose(-2,-1) / np.sqrt(self.intern_size)
+        # -> [seq len, internal] * [internal, seq len] = [seq len,seq len]
+        attn = torch.softmax(scores, dim=-1)
         self.attention_map.append(attn)
         
-        residual=attn @ self.v(input_vecs) # -> [seq len,moseq lendel] * [seq len, internal] = [seq len, internal]
-        residual+=self.out(input_vecs) # mapped so we can do [seq len, internal] + [seq len, internal]
+        res_con = self.attn_out(attn @ self.v(input_vecs)) # -> [seq len,seq len] * [seq len, internal] = [seq len, internal] -> [seq len, model]
+        res_con += input_vecs # [seq len, model] + [seq len, model]
         
-        return residual
+        res = self.ffn(res_con) # [seq len, model] -> [seq len, model]
+        res += res_con # [seq len, model] + [seq len, model], for final residual connection, we try to do an continous residual
+        
+        return res
 
 
 # Implementation of positional encoding that you can use in your network
