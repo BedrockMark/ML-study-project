@@ -102,7 +102,14 @@ def print_evaluation(text, lm, vocab_index, output_bundle_path):
     perplexity = np.exp(-log_prob / len(text))
     normalizes = normalization_test(lm, vocab_index)
     range_check = perplexity_range_check(perplexity)
-    data = {'sane': sane, 'normalizes': normalizes, 'range': range_check, 'log_prob': log_prob, 'avg_log_prob': avg_log_prob, 'perplexity': perplexity}
+    data = {
+        'sane': float(sane),
+        'normalizes': float(normalizes),
+        'range': float(range_check),
+        'log_prob': float(log_prob),
+        'avg_log_prob': float(avg_log_prob),
+        'perplexity': float(perplexity),
+    }
     print("=====Results=====")
     print(json.dumps(data, indent=2))
     with open(output_bundle_path, 'w') as outfile:
