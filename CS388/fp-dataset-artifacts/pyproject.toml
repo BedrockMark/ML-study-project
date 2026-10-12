@@ -1,0 +1,25 @@
+[project]
+name = "fp-dataset-artifacts"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Mark Liu", email = "lbigjoybigl@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "accelerate>=1.15.0",
+    "datasets<3.0.0",
+    "evaluate>=0.4.6",
+    "huggingface-hub<0.24.0",
+    "torch>=2.14.1",
+    "tqdm>=4.70.1",
+    "transformers<4.45.0",
+]
+
+[project.scripts]
+fp-dataset-artifacts = "fp_dataset_artifacts:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
