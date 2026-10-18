@@ -2,6 +2,7 @@
 output/
 
 trained_model/
+LIT_auto-gen-contrast-set/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

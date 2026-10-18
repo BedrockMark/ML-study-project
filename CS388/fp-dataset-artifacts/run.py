@@ -12,7 +12,7 @@ NUM_PREPROCESSING_WORKERS = 2
 
 def main():
     argp = HfArgumentParser(TrainingArguments)
-    # python3 run.py --per_device_train_batch_size 32 --do_train --task nli --dataset snli --output_dir ./trained_model/
+    # python3 run.py --per_device_train_batch_size 72 --do_train --task nli --dataset snli --output_dir ./trained_model/
     # 
     # The HfArgumentParser object collects command-line arguments into an object (and provides default values for unspecified arguments).
     # In particular, TrainingArguments has several keys that you'll need/want to specify (when you call run.py from the command line):
@@ -49,6 +49,13 @@ def main():
                       help='Limit the number of examples to train on.')
     argp.add_argument('--max_eval_samples', type=int, default=None,
                       help='Limit the number of examples to evaluate on.')
+    
+    argp.add_argument(
+        '--no_premise',
+        action='store_false',
+        dest='provide_premise',
+        help='Do not provide premise.'
+    )
 
     training_args, args = argp.parse_args_into_dataclasses()
 
@@ -95,8 +102,9 @@ def main():
         prepare_train_dataset = lambda exs: prepare_train_dataset_qa(exs, tokenizer)
         prepare_eval_dataset = lambda exs: prepare_validation_dataset_qa(exs, tokenizer)
     elif args.task == 'nli':
+        print(f"------------PROVIDE PREMISE? {args.provide_premise}-----------")
         prepare_train_dataset = prepare_eval_dataset = \
-            lambda exs: prepare_dataset_nli(exs, tokenizer, args.max_length)
+            lambda exs: prepare_dataset_nli(exs, tokenizer, args.max_length, args.provide_premise)
         # prepare_eval_dataset = prepare_dataset_nli
     else:
         raise ValueError('Unrecognized task name: {}'.format(args.task))
