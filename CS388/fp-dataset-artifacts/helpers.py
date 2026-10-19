@@ -10,8 +10,9 @@ QA_MAX_ANSWER_LENGTH = 30
 
 
 # This function preprocesses an NLI dataset, tokenizing premises and hypotheses.
-def prepare_dataset_nli(examples, tokenizer, max_seq_length=None, provide_premise = True):
+def prepare_dataset_nli(examples, tokenizer, max_seq_length=None, provide_premise = True, unbias_process = False):
     # print(f"------------PROVIDE PREMISE? {provide_premise}-----------")
+    # print(f"------------unbias_process? {unbias_process}-----------")
     
     max_seq_length = tokenizer.model_max_length if max_seq_length is None else max_seq_length
     
@@ -27,6 +28,17 @@ def prepare_dataset_nli(examples, tokenizer, max_seq_length=None, provide_premis
         max_length=max_seq_length,
         padding='max_length'
     )
+    
+    if(unbias_process):
+        bias = tokenizer(
+            examples['hypothesis'],
+            truncation=True,
+            max_length=max_seq_length,
+            padding='max_length'
+        )
+        tokenized_examples["bias_input_ids"] = bias["input_ids"]
+        tokenized_examples["bias_attention_mask"] = bias["attention_mask"]
+    
 
     tokenized_examples['label'] = examples['label']
     return tokenized_examples
@@ -256,6 +268,62 @@ def postprocess_qa_predictions(examples,
 
         all_predictions[example["id"]] = predictions[0]["text"]
     return all_predictions
+
+
+import torch
+import torch.nn.functional as F
+class DriftTrainer(Trainer):
+    def __init__(self, *args, biased_model, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.biased_model = biased_model
+        self.biased_model.requires_grad_(False)
+        self.biased_model.eval()
+        main_device = next(self.model.parameters()).device
+        self.biased_model.to(main_device)
+
+    def compute_loss(
+        self,
+        model,
+        inputs,
+        return_outputs=False,
+        num_items_in_batch=None,
+    ):
+        
+        # 取出 hypothesis-only 输入
+        bias_inputs = {
+            "input_ids": inputs.pop("bias_input_ids"),
+            "attention_mask": inputs.pop("bias_attention_mask"),
+        }
+        
+        # Something will be on a wrong device
+        # print("Main model:", next(model.parameters()).device)
+        # print("Biased model:", next(self.biased_model.parameters()).device)
+        # print("Bias inputs:", bias_inputs["input_ids"].device)
+
+        if "bias_token_type_ids" in inputs:
+            bias_inputs["token_type_ids"] = inputs.pop(
+                "bias_token_type_ids"
+            )
+
+        # 标签单独取出，避免模型自行计算普通 CE loss
+        labels = inputs.pop("labels")
+
+        # 主模型：premise + hypothesis
+        main_outputs = model(**inputs)
+        main_logits = main_outputs.logits
+
+        # 固定的 biased model：hypothesis only
+        self.biased_model.eval()
+        with torch.no_grad():
+            bias_outputs = self.biased_model(**bias_inputs)
+            bias_logits = bias_outputs.logits
+
+        # DRiFt：组合 logits 后计算交叉熵
+        combined_logits = main_logits + bias_logits
+        loss = F.cross_entropy(combined_logits, labels)
+
+        return (loss, main_outputs) if return_outputs else loss
 
 
 # Adapted from https://github.com/huggingface/transformers/blob/master/examples/pytorch/question-answering/trainer_qa.py

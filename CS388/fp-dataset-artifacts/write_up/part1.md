@@ -33,11 +33,11 @@ The following 2 represents the way I used to train and evaluate the model:
 Train&evaluate base model:
 ```
 python3 run.py --per_device_train_batch_size 72 --do_train --task nli --dataset snli --output_dir ./trained_model/
-python3 run.py --do_eval --task nli --dataset AntoineBlanot/snli-contrast --model ./trained_model/ --output_dir ./eval_output/  
+python3 run.py --do_eval --task nli --dataset stanfordnlp/snli --model ./trained_model/ --output_dir ./eval_output/  
 ```
 
 Train&evaluate test model:
 ```
 python3 run.py --per_device_train_batch_size 72 --do_train --task nli --dataset snli --output_dir ./trained_model/ --no_premise
-python3 run.py --do_eval --task nli --dataset AntoineBlanot/snli-contrast --model ./trained_model/ --output_dir ./eval_output/  --no_premise
+python3 run.py --do_eval --task nli --dataset stanfordnlp/snli --model ./trained_model/ --output_dir ./eval_output/  --no_premise
 ```

@@ -3,7 +3,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, \
     AutoModelForQuestionAnswering, Trainer, TrainingArguments, HfArgumentParser
 import evaluate
 from helpers import prepare_dataset_nli, prepare_train_dataset_qa, \
-    prepare_validation_dataset_qa, QuestionAnsweringTrainer, compute_accuracy
+    prepare_validation_dataset_qa, QuestionAnsweringTrainer, compute_accuracy, DriftTrainer
 import os
 import json
 
@@ -36,6 +36,9 @@ def main():
                       help="""This argument specifies the base model to fine-tune.
         This should either be a HuggingFace model ID (see https://huggingface.co/models)
         or a path to a saved model checkpoint (a folder containing config.json and pytorch_model.bin).""")
+    argp.add_argument('--biased_model', type=str,
+                      default="",
+                      help="""This argument specifies the path to the biased model. Once being filled, it'll use DriftTrainer and attempt to unbias the training.""")
     argp.add_argument('--task', type=str, choices=['nli', 'qa'], required=True,
                       help="""This argument specifies which task to train/evaluate on.
         Pass "nli" for natural language inference or "qa" for question answering.
@@ -58,7 +61,8 @@ def main():
     )
 
     training_args, args = argp.parse_args_into_dataclasses()
-
+    training_args.remove_unused_columns = False
+    
     # Dataset selection
     # IMPORTANT: this code path allows you to load custom datasets different from the standard SQuAD or SNLI ones.
     # You need to format the dataset appropriately. For SNLI, you can prepare a file with each line containing one
@@ -104,14 +108,15 @@ def main():
     elif args.task == 'nli':
         print(f"------------PROVIDE PREMISE? {args.provide_premise}-----------")
         prepare_train_dataset = prepare_eval_dataset = \
-            lambda exs: prepare_dataset_nli(exs, tokenizer, args.max_length, args.provide_premise)
+            lambda exs: prepare_dataset_nli(exs, tokenizer, args.max_length, args.provide_premise, args.biased_model!="")
         # prepare_eval_dataset = prepare_dataset_nli
     else:
         raise ValueError('Unrecognized task name: {}'.format(args.task))
 
-    print("Preprocessing data... (this takes a little bit, should only happen once per dataset)")
-    if dataset_id == ('snli',):
+    print(f"Preprocessing data for [{dataset_id}]... (this takes a little bit, should only happen once per dataset)")
+    if dataset_id == ('stanfordnlp/snli',):
         # remove SNLI examples with no label
+        print("------ FILTERED OUT ------") # hey it's the original source code, how was it problematic lol
         dataset = dataset.filter(lambda ex: ex['label'] != -1)
     
     train_dataset = None
@@ -138,9 +143,11 @@ def main():
             num_proc=NUM_PREPROCESSING_WORKERS,
             remove_columns=eval_dataset.column_names
         )
+    # print(train_dataset_featurized.column_names)
+    # print(train_dataset_featurized[0].keys())
 
     # Select the training configuration
-    trainer_class = Trainer
+    trainer_class = Trainer if args.biased_model=="" else DriftTrainer
     eval_kwargs = {}
     # If you want to use custom metrics, you should define your own "compute_metrics" function.
     # For an example of a valid compute_metrics function, see compute_accuracy in helpers.py.
@@ -164,16 +171,37 @@ def main():
         nonlocal eval_predictions
         eval_predictions = eval_preds
         return compute_metrics(eval_preds)
-
-    # Initialize the Trainer object with the specified arguments and the model and dataset we loaded above
-    trainer = trainer_class(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset_featurized,
-        eval_dataset=eval_dataset_featurized,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics_and_store_predictions
-    )
+    
+    if not args.biased_model=="":
+    
+        biased_model = AutoModelForSequenceClassification.from_pretrained(
+            args.biased_model,
+            num_labels=3,
+        )
+        trainer = trainer_class(
+            model=model,
+            biased_model=biased_model,
+            args=training_args,
+            train_dataset=train_dataset_featurized,
+            eval_dataset=eval_dataset_featurized,
+            tokenizer=tokenizer,
+            compute_metrics=compute_metrics_and_store_predictions
+        )
+    else:
+        # Initialize the Trainer object with the specified arguments and the model and dataset we loaded above
+        trainer = trainer_class(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset_featurized,
+            eval_dataset=eval_dataset_featurized,
+            tokenizer=tokenizer,
+            compute_metrics=compute_metrics_and_store_predictions
+        )
+    
+    # Before training, check if columns were input correctly
+    # print(train_dataset.column_names)
+    # print(train_dataset[0].keys())
+    
     # Train and/or evaluate
     if training_args.do_train:
         trainer.train()
@@ -186,6 +214,19 @@ def main():
         #   and https://huggingface.co/transformers/main_classes/callback.html#transformers.TrainerCallback
 
     if training_args.do_eval:
+        # Check unique labels in the evaluation dataset
+        eval_labels = eval_dataset["label"]  # replace "label" with your target column name
+
+        # Flatten if it's token classification (nested lists)
+        if isinstance(eval_labels[0], list):
+            flat_labels = [item for sublist in eval_labels for item in sublist]
+        else:
+            flat_labels = eval_labels
+
+        unique_labels = set(flat_labels)
+        print(f"Unique labels in eval dataset: {sorted(unique_labels)}")
+        print(f"Model num_labels: {model.config.num_labels}")
+        
         results = trainer.evaluate(**eval_kwargs)
 
         # To add custom metrics, you should replace the "compute_metrics" function (see comments above).
