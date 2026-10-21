@@ -114,7 +114,7 @@ def main():
         raise ValueError('Unrecognized task name: {}'.format(args.task))
 
     print(f"Preprocessing data for [{dataset_id}]... (this takes a little bit, should only happen once per dataset)")
-    if dataset_id == ('stanfordnlp/snli',):
+    if dataset_id == ('snli',):
         # remove SNLI examples with no label
         print("------ FILTERED OUT ------") # hey it's the original source code, how was it problematic lol
         dataset = dataset.filter(lambda ex: ex['label'] != -1)

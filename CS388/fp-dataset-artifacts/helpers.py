@@ -319,7 +319,7 @@ class DriftTrainer(Trainer):
             bias_outputs = self.biased_model(**bias_inputs)
             bias_logits = bias_outputs.logits
 
-        # DRiFt：组合 logits 后计算交叉熵
+        # DRiFt: 组合 logits 后计算交叉熵
         combined_logits = main_logits + bias_logits
         loss = F.cross_entropy(combined_logits, labels)
 
